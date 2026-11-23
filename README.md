@@ -13,6 +13,8 @@ throw new Error("boom");
 | E2B before | `exit status 1` | empty |
 | E2B with the patch | `boom` | `starting` |
 
+Reported upstream as [mcp-use#3161](https://github.com/mcp-use/mcp-use/issues/3161).
+
 Read `docs/index.html` for the walkthrough and a small interactive comparison.
 
 ## Contents
@@ -20,6 +22,7 @@ Read `docs/index.html` for the walkthrough and a small interactive comparison.
 - `patch/pr1-thrown-errors.diff`: the change against mcp-use canary `d3f543b`, with its tests and changeset. Read it with `git apply --stat` or `git diff -w`.
 - `data/results.json`: the recorded output the page shows.
 - `reproduce/`: a one-command offline comparison of four programs.
+- `LICENSE` and `NOTICE.md`: MIT for this repo's own work, and the upstream mcp-use license for the code the patch changes.
 
 ## Reproduce the four-program comparison
 Needs Docker and a clone of mcp-use with dependencies installed. It uses no key and no network.
@@ -37,3 +40,5 @@ It exports the base commit twice, applies the patch to one copy, and runs both i
 - A program that reads its own script can forge the error marker. This reports the program's own error and is not a security boundary.
 - Real E2B was run in one region at the default sandbox size, 8 cases per run. Cost was not read from the E2B dashboard.
 - Two tool calls in one output chunk still run one after the other, and a call split across chunks is not served.
+
+The 60-program table compares a larger prototype branch, not the patch alone. The patch was tested separately on real E2B in 8 cases.

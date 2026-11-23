@@ -75,7 +75,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 <section class="wrap"><div class="col stack">
   <p class="eyebrow">mcp-use code mode</p>
   <h1>A program that throws should say why, on every executor</h1>
-  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>. The E2B executor runs it in a remote sandbox. When a program threw on E2B, the caller got <code>exit status 1</code> and lost both the message and the logs. This project finds out why, measures how often it happens, and proposes a small patch with tests.</p>
+  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>. The E2B executor runs it in a remote sandbox. When a program threw on E2B, the caller got <code>exit status 1</code> and lost both the message and the logs. This project finds out why, measures how often it happens, and proposes a small patch with tests. It is reported upstream as <a href="https://github.com/mcp-use/mcp-use/issues/3161">mcp-use issue #3161</a>.</p>
 </div></section>
 
 <section class="wrap"><div class="col stack">
@@ -111,9 +111,10 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
     <thead><tr><th>Code</th><th class="num">All match</th><th class="num">Result or error differs</th><th class="num">Logs only</th><th class="num">Real error lost</th></tr></thead>
     <tbody>
       <tr><td>Shipped (canary <code>d3f543b</code>)</td><td class="num">0</td><td class="num">33</td><td class="num">27</td><td class="num">22</td></tr>
-      <tr><td>Prototype with all fixes</td><td class="num">54</td><td class="num">6</td><td class="num">0</td><td class="num">0</td></tr>
+      <tr><td>Larger prototype branch, not proposed upstream yet</td><td class="num">54</td><td class="num">6</td><td class="num">0</td><td class="num">0</td></tr>
     </tbody>
   </table></div>
+  <p>The prototype row is a larger branch than the patch on this page. The patch alone was not measured on these 60 programs. An earlier probe of the same fix removed all 22 lost errors in the offline sandbox, and the patch was run separately on real E2B in 8 cases.</p>
   <p>The 0 needs its breakdown. 27 programs differ only by one extra log line, so the number that matters is 33, and in 22 of those the real error was lost. In the prototype the other 6 are tool calls that never answer, where the VM does not apply its timeout (issue #2874).</p>
 </div></section>
 
