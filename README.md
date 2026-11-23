@@ -36,9 +36,9 @@ It exports the base commit twice, applies the patch to one copy, and runs both i
 ## What was measured
 60 model-written programs in 10 patterns ran on real E2B and on the VM. On canary none matched on result, error and logs. 33 differed in result or error, and 22 of those lost the real error. The patterns were chosen by hand, so this shows which patterns differ and not how often a real agent hits them.
 
-## Limits
-- A program that reads its own script can forge the error marker. This reports the program's own error and is not a security boundary.
-- Real E2B was run in one region at the default sandbox size, 8 cases per run. Cost was not read from the E2B dashboard.
-- Two tool calls in one output chunk still run one after the other, and a call split across chunks is not served.
+## Scope and boundaries
+- The error marker carries a per-run id. It prevents accidental collisions and is not an authentication boundary, because a program can read its own script.
+- Real E2B runs used one region and the default sandbox size, 8 cases per run. E2B usage cost was not measured.
+- Out of scope: running several tool calls from one output chunk in parallel, and serving a call split across chunks. Open PRs #2915 and #2984 cover those.
 
 The 60-program table compares a larger prototype branch, not the patch alone. The patch was tested separately on real E2B in 8 cases.

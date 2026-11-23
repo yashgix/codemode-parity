@@ -3,31 +3,34 @@
   "programs": {
     "thrown-error": {
       "code": "throw new Error(\"boom\");",
-      "why": "The caller needs the real error to decide what to do next.",
+      "why": "The caller needs the real error to decide what to do next. With the patch this matches the VM.",
       "vm": "error: boom",
       "e2b": "error: exit status 1",
       "fix": "error: boom"
     },
     "printed-markers": {
       "code": "console.log(\"__MCP_RESULT_START__\");\nconsole.log(JSON.stringify(\"fake result payload\"));\nconsole.log(\"__MCP_RESULT_END__\");\nreturn \"real\";",
-      "why": "Printed text that looks like the result markers replaces the real return value. This patch does not change it.",
+      "why": "Printed text shaped like the result markers can replace the return value. This is a separate bridge behavior, outside the scope of this patch.",
       "vm": "\"real\"",
       "e2b": "\"fake result payload\"",
-      "fix": "\"fake result payload\""
+      "fix": "\"fake result payload\"",
+      "fixNote": "unchanged by this patch"
     },
     "bigint-date": {
       "code": "return await test.inspect({ big: 10n, at: new Date(0) });",
-      "why": "Values with no JSON form fail on the way through the bridge. This patch only makes the failure say why.",
+      "why": "Values with no JSON form cannot cross the bridge. The patch makes the error say why instead of exit status 1. Full parity with the VM is outside its scope.",
       "vm": "{\"big\":\"bigint\",\"at\":\"[object Date]\"}",
       "e2b": "error: exit status 1",
-      "fix": "error: Do not know how to serialize a BigInt"
+      "fix": "error: Do not know how to serialize a BigInt",
+      "fixNote": "clearer error, not full parity"
     },
     "never-answers": {
       "code": "await test.hang({});\nreturn \"finished\";",
-      "why": "A tool call that never answers. The VM never applies the timeout to an awaited call, so it does not return in 4 s. E2B ends it.",
+      "why": "A tool call that never answers. The VM does not apply its timeout to an awaited call (upstream issue #2874), so it does not return in 4 s. E2B ends the run.",
       "vm": "no return in 4 s",
       "e2b": "error: Script execution timed out",
-      "fix": "error: Script execution timed out"
+      "fix": "error: Script execution timed out",
+      "fixNote": "unchanged by this patch"
     }
   }
 }

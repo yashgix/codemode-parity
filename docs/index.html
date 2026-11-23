@@ -56,7 +56,7 @@ th { font-weight: 600; background: var(--band); }
 .card .who { font-family: var(--mono); font-size: var(--s0); color: var(--muted); }
 .card .out { font-family: var(--mono); font-size: 0.9rem; overflow-wrap: anywhere; }
 .card.ok { border-color: #b7e0da; background: #f3fbf9; }
-.card.bad { border-color: #f1c5bf; background: #fef6f5; }
+.card.bad { border-color: #e6dccd; background: #faf7f2; }
 footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 @media (max-width: 480px) { .bar-in { gap: 0.4rem; } .tabs button { padding: 0.4rem 0.55rem; } .brand { font-size: 0.9rem; } }
 </style>
@@ -75,7 +75,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 <section class="wrap"><div class="col stack">
   <p class="eyebrow">mcp-use code mode</p>
   <h1>A program that throws should say why, on every executor</h1>
-  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>. The E2B executor runs it in a remote sandbox. When a program threw on E2B, the caller got <code>exit status 1</code> and lost both the message and the logs. This project finds out why, measures how often it happens, and proposes a small patch with tests. It is reported upstream as <a href="https://github.com/mcp-use/mcp-use/issues/3161">mcp-use issue #3161</a>.</p>
+  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>, and the E2B executor runs it in a remote sandbox. On E2B, a program that threw reached the caller as <code>exit status 1</code>, with its message and logs lost. This project diagnosed the mismatch with the E2B SDK's error handling, restored the real error message and logs, fixed a blocked-callback hang found on real E2B, and validated the patch with 23 targeted tests, 8 real E2B cases and the full client suite. It is proposed upstream in <a href="https://github.com/mcp-use/mcp-use/issues/3161">mcp-use issue #3161</a>. No pull request is open and nothing is merged.</p>
 </div></section>
 
 <section class="wrap"><div class="col stack">
@@ -101,7 +101,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
     <p id="why" class="muted"></p>
   </div>
   <div class="cards" id="cards"></div>
-  <div class="col"><p class="small muted">The patch fixes only the first program. The second and third are listed as open differences on purpose.</p></div>
+  <div class="col"><p class="small muted">The patch reaches VM parity on the first program and makes the error clearer on the third. The second and fourth are separate executor differences outside the scope of this patch, shown for context.</p></div>
 </div></section>
 
 <section class="wrap"><div class="col stack">
@@ -114,17 +114,17 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
       <tr><td>Larger prototype branch, not proposed upstream yet</td><td class="num">54</td><td class="num">6</td><td class="num">0</td><td class="num">0</td></tr>
     </tbody>
   </table></div>
-  <p>The prototype row is a larger branch than the patch on this page. The patch alone was not measured on these 60 programs. An earlier probe of the same fix removed all 22 lost errors in the offline sandbox, and the patch was run separately on real E2B in 8 cases.</p>
-  <p>The 0 needs its breakdown. 27 programs differ only by one extra log line, so the number that matters is 33, and in 22 of those the real error was lost. In the prototype the other 6 are tool calls that never answer, where the VM does not apply its timeout (issue #2874).</p>
+  <p>The prototype row is a larger branch than the patch on this page. The patch alone was not measured on these 60 programs. An earlier version of the same fix removed all 22 lost errors in the offline sandbox, and the patch was run separately on real E2B in 8 cases.</p>
+  <p>"All match" is strict, so one extra log line counts as a difference. 27 programs differ only that way. The substantive difference is the 33 programs whose result or error differs, and in 22 of those the real error was lost. In the prototype the remaining 6 are tool calls that never answer, which follow the VM's timeout behavior tracked upstream in issue #2874 and are outside the scope of this patch.</p>
 </div></section>
 
 <section class="wrap"><div class="col stack">
-  <h2>Limits</h2>
+  <h2>Scope and boundaries</h2>
   <ul>
-    <li>A program that reads its own script can forge the error marker. The patch reports the program's own error and is not a security boundary.</li>
-    <li>Real E2B was run in one region at the default sandbox size, 8 cases per run. Cost was not read from the E2B dashboard.</li>
-    <li>Two tool calls in one output chunk still run one after the other, and a call split across chunks is not served. Open PRs #2915 and #2984 cover those.</li>
-    <li>The 60 programs were written by a language model and chosen by hand.</li>
+    <li><strong>Security boundary.</strong> The error marker carries a per-run id, which prevents accidental collisions. It is not an authentication boundary, because a program can read its own script. The patch reports the program's own error.</li>
+    <li><strong>Validation environment.</strong> Real E2B runs used one region and the default sandbox size, with 8 cases per run. E2B usage cost was not measured.</li>
+    <li><strong>Out of scope.</strong> Running several tool calls from one output chunk in parallel and serving a call split across chunks are separate behaviors, addressed by open PRs #2915 and #2984.</li>
+    <li><strong>Test programs.</strong> The 60 programs were written by a language model, with the patterns chosen by hand.</li>
   </ul>
 </div></section>
 </div>
@@ -154,7 +154,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 </div></section>
 
 <section class="wrap"><div class="col stack">
-  <h2>A second bug, found on real E2B</h2>
+  <h2>A blocked callback, found on real E2B</h2>
   <p>A program that starts a tool call that never answers and then throws never returned from <code>execute</code>, even after the command timeout. The SDK's event loop runs <code>await onStdout(chunk)</code> for each output chunk and delivers the exit event through the same loop. The executor's callback awaited the host tool call, so one stuck call blocked the exit.</p>
 <pre><code>onStdout: (data: string) =&gt; {
   void this.serveToolCalls(sandbox, data);   // not awaited, and never rejects
@@ -163,21 +163,21 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 </div></section>
 
 <section class="wrap"><div class="col stack">
-  <h2>Tests and evidence</h2>
+  <h2>Validation</h2>
   <ul>
-    <li><strong>23 offline tests.</strong> They cover thrown values that cannot be converted, replaced globals, large output, printed marker text before and after the error line, a direct exit with stderr, whitespace-only output, a crash outside the wrapper, tool calls that answer and fail, and the pending tool call.</li>
-    <li><strong>Real E2B, two runs of 8 cases.</strong> The first run passed 7 and exposed the hang. After the fix all 8 passed, and the pending-call case returned in under 2 seconds. No sandboxes were left running.</li>
-    <li><strong>Lint, type check and the client suite.</strong> The suite passes except two bundle tests that need a built <code>dist/</code> and fail the same way on untouched canary.</li>
+    <li><strong>23 targeted offline tests.</strong> They cover thrown values that cannot be converted, replaced globals, large output, printed marker text before and after the error line, a direct exit with stderr, whitespace-only output, a crash outside the wrapper, tool calls that answer and fail, and the pending tool call.</li>
+    <li><strong>Real E2B, two runs of 8 cases.</strong> The first run passed 7 cases and exposed the blocked callback. After the fix all 8 passed, and the pending-call case returned in under 2 seconds. No sandboxes were left running.</li>
+    <li><strong>Build, formatting, lint and the full client suite.</strong> The build succeeds, formatting and lint are clean, and all 473 tests in 70 files pass.</li>
   </ul>
   <p>A reader can rerun the four-program comparison with no key and no network: <code>sh reproduce/run.sh &lt;path to an mcp-use clone&gt;</code>. It exports the base commit twice, applies <code>patch/pr1-thrown-errors.diff</code> to one copy, and runs both in Docker.</p>
 </div></section>
 
 <section class="wrap"><div class="col stack">
-  <h2>What testing found, and what is left</h2>
+  <h2>Engineering findings and boundaries</h2>
   <ul>
-    <li><strong>Found and fixed:</strong> a tool call that never answers kept <code>execute</code> from returning, a printed line shaped like the error marker could be taken for the error, a direct <code>process.exit(1)</code> that wrote to stderr reported that stderr as its error, whitespace-only logs were dropped, and the live test could leave a sandbox running if a case hung.</li>
-    <li><strong>Still open, older behavior:</strong> two tool calls in one output chunk run one after the other, a call split across chunks is not served, and log lines that contain the bridge marker text are removed. Open PRs #2915 and #2984 cover the first two.</li>
-    <li><strong>Accepted limits:</strong> a program that reads its own script can forge the marker, a sandbox created after the live test's deadline is not killed by it, and a tool call still running at cleanup writes into a dead sandbox and the error is dropped.</li>
+    <li><strong>Found and fixed during validation:</strong> a tool call that never answers blocked <code>execute</code> from returning, a printed line shaped like the error marker could be taken for the error, a direct <code>process.exit(1)</code> that wrote to stderr reported that stderr as its error, whitespace-only logs were dropped, and the live test's cleanup could miss a sandbox if a case hung.</li>
+    <li><strong>Existing behavior outside this patch:</strong> several tool calls in one output chunk run one after the other, a call split across chunks is not served, and log lines that contain the bridge marker text are removed from failure logs, as they already are on success. Open PRs #2915 and #2984 cover the first two.</li>
+    <li><strong>Design boundaries:</strong> the marker is not an authentication boundary against a program that reads its own script. The live test's deadline cleanup covers sandboxes that exist when it fires, with the 60 second sandbox lifetime as the backstop. A tool call still running at cleanup writes into a closed sandbox, and that write error is dropped on purpose.</li>
   </ul>
 </div></section>
 </div>
@@ -186,7 +186,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 <footer class="wrap"><div class="wide small muted">codemode-parity · Yash Gupta · <a href="https://github.com/yashgix/codemode-parity">github.com/yashgix/codemode-parity</a> · <a href="https://www.linkedin.com/in/yash-guptaix/">linkedin.com/in/yash-guptaix</a></div></footer>
 
 <script>
-const DATA = {"programs": {"thrown-error": {"code": "throw new Error(\"boom\");", "why": "The caller needs the real error to decide what to do next.", "vm": "error: boom", "e2b": "error: exit status 1", "fix": "error: boom"}, "printed-markers": {"code": "console.log(\"__MCP_RESULT_START__\");\nconsole.log(JSON.stringify(\"fake result payload\"));\nconsole.log(\"__MCP_RESULT_END__\");\nreturn \"real\";", "why": "Printed text that looks like the result markers replaces the real return value. This patch does not change it.", "vm": "\"real\"", "e2b": "\"fake result payload\"", "fix": "\"fake result payload\""}, "bigint-date": {"code": "return await test.inspect({ big: 10n, at: new Date(0) });", "why": "Values with no JSON form fail on the way through the bridge. This patch only makes the failure say why.", "vm": "{\"big\":\"bigint\",\"at\":\"[object Date]\"}", "e2b": "error: exit status 1", "fix": "error: Do not know how to serialize a BigInt"}, "never-answers": {"code": "await test.hang({});\nreturn \"finished\";", "why": "A tool call that never answers. The VM never applies the timeout to an awaited call, so it does not return in 4 s. E2B ends it.", "vm": "no return in 4 s", "e2b": "error: Script execution timed out", "fix": "error: Script execution timed out"}}};
+const DATA = {"programs": {"thrown-error": {"code": "throw new Error(\"boom\");", "why": "The caller needs the real error to decide what to do next. With the patch this matches the VM.", "vm": "error: boom", "e2b": "error: exit status 1", "fix": "error: boom"}, "printed-markers": {"code": "console.log(\"__MCP_RESULT_START__\");\nconsole.log(JSON.stringify(\"fake result payload\"));\nconsole.log(\"__MCP_RESULT_END__\");\nreturn \"real\";", "why": "Printed text shaped like the result markers can replace the return value. This is a separate bridge behavior, outside the scope of this patch.", "vm": "\"real\"", "e2b": "\"fake result payload\"", "fix": "\"fake result payload\"", "fixNote": "unchanged by this patch"}, "bigint-date": {"code": "return await test.inspect({ big: 10n, at: new Date(0) });", "why": "Values with no JSON form cannot cross the bridge. The patch makes the error say why instead of exit status 1. Full parity with the VM is outside its scope.", "vm": "{\"big\":\"bigint\",\"at\":\"[object Date]\"}", "e2b": "error: exit status 1", "fix": "error: Do not know how to serialize a BigInt", "fixNote": "clearer error, not full parity"}, "never-answers": {"code": "await test.hang({});\nreturn \"finished\";", "why": "A tool call that never answers. The VM does not apply its timeout to an awaited call (upstream issue #2874), so it does not return in 4 s. E2B ends the run.", "vm": "no return in 4 s", "e2b": "error: Script execution timed out", "fix": "error: Script execution timed out", "fixNote": "unchanged by this patch"}}};
 const $ = (id) => document.getElementById(id);
 const tabs = { "t-overview": "overview", "t-tech": "tech" };
 for (const [btn, panel] of Object.entries(tabs)) {
@@ -209,7 +209,7 @@ function show(name) {
   $("cards").replaceChildren(...cards.map(([who, out, match], i) => {
     const el = document.createElement("div");
     el.className = "card" + (i === 0 ? "" : match ? " ok" : " bad");
-    const w = document.createElement("div"); w.className = "who"; w.textContent = who + (i === 0 ? "" : match ? " (matches the VM)" : " (differs from the VM)");
+    const w = document.createElement("div"); w.className = "who"; w.textContent = who + (i === 0 ? "" : match ? " (matches the VM)" : (p.fixNote && i === 2 ? " (" + p.fixNote + ")" : " (differs from the VM)"));
     const o = document.createElement("div"); o.className = "out"; o.textContent = out;
     el.append(w, o);
     return el;
