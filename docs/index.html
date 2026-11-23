@@ -94,7 +94,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 <section class="wrap"><div class="wide stack">
   <div class="col stack">
     <h2>Try the same program on each executor</h2>
-    <p class="small muted">Recorded output, not a live run. Pick a program.</p>
+    <p class="small muted">Recorded output from the offline test sandbox, not a live E2B run. Pick a program.</p>
     <div class="picker" id="picker" role="group" aria-label="Program"></div>
     <pre><code id="code"></code></pre>
     <p id="why" class="muted"></p>
@@ -171,13 +171,17 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 </div></section>
 
 <section class="wrap"><div class="col stack">
-  <h2>What reviews said</h2>
-  <p>The patch went through several independent reviews. None was a clean accept. They found the pending-call hang, a printed-marker case, a rule for direct exits with stderr, and a flaw in the live test's cleanup. Each was fixed or recorded as a limit. Two findings were left open on purpose because they are older behavior covered by open PRs: tool calls sharing one output chunk, and calls split across chunks.</p>
+  <h2>What testing found, and what is left</h2>
+  <ul>
+    <li><strong>Found and fixed:</strong> a tool call that never answers kept <code>execute</code> from returning, a printed line shaped like the error marker could be taken for the error, a direct <code>process.exit(1)</code> that wrote to stderr reported that stderr as its error, whitespace-only logs were dropped, and the live test could leave a sandbox running if a case hung.</li>
+    <li><strong>Still open, older behavior:</strong> two tool calls in one output chunk run one after the other, a call split across chunks is not served, and log lines that contain the bridge marker text are removed. Open PRs #2915 and #2984 cover the first two.</li>
+    <li><strong>Accepted limits:</strong> a program that reads its own script can forge the marker, a sandbox created after the live test's deadline is not killed by it, and a tool call still running at cleanup writes into a dead sandbox and the error is dropped.</li>
+  </ul>
 </div></section>
 </div>
 </main>
 
-<footer class="wrap"><div class="wide small muted">codemode-parity · Yash Gupta · <a href="https://github.com/yashgix/codemode-parity">github.com/yashgix/codemode-parity</a></div></footer>
+<footer class="wrap"><div class="wide small muted">codemode-parity · Yash Gupta · <a href="https://github.com/yashgix/codemode-parity">github.com/yashgix/codemode-parity</a> · <a href="https://www.linkedin.com/in/yash-guptaix/">linkedin.com/in/yash-guptaix</a></div></footer>
 
 <script>
 const DATA = {"programs": {"thrown-error": {"code": "throw new Error(\"boom\");", "why": "The caller needs the real error to decide what to do next.", "vm": "error: boom", "e2b": "error: exit status 1", "fix": "error: boom"}, "printed-markers": {"code": "console.log(\"__MCP_RESULT_START__\");\nconsole.log(JSON.stringify(\"fake result payload\"));\nconsole.log(\"__MCP_RESULT_END__\");\nreturn \"real\";", "why": "Printed text that looks like the result markers replaces the real return value. This patch does not change it.", "vm": "\"real\"", "e2b": "\"fake result payload\"", "fix": "\"fake result payload\""}, "bigint-date": {"code": "return await test.inspect({ big: 10n, at: new Date(0) });", "why": "Values with no JSON form fail on the way through the bridge. This patch only makes the failure say why.", "vm": "{\"big\":\"bigint\",\"at\":\"[object Date]\"}", "e2b": "error: exit status 1", "fix": "error: Do not know how to serialize a BigInt"}, "never-answers": {"code": "await test.hang({});\nreturn \"finished\";", "why": "A tool call that never answers. The VM never applies the timeout to an awaited call, so it does not return in 4 s. E2B ends it.", "vm": "no return in 4 s", "e2b": "error: Script execution timed out", "fix": "error: Script execution timed out"}}};
