@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>codemode-parity</title>
+<meta name="description" content="Why a program that throws on the E2B code mode executor returned 'exit status 1', how it was found, and a small patch with tests.">
+<style>
+:root {
+  color-scheme: light;
+  --paper: #ffffff; --band: #f7f5f2; --ink: #1d1a17; --muted: #5f5852; --line: #e9e4de;
+  --accent: #c2410c; --accent-soft: #fbeee6; --ok: #0f766e; --bad: #b42318; --code: #f2efeb;
+  --sans: "Instrument Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "Fragment Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --s0: 0.8125rem; --s1: 1.0625rem; --s3: 1.65rem; --s4: clamp(2.2rem, 5.5vw, 3.2rem);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: var(--s1); line-height: 1.65; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.col { max-width: 760px; margin-inline: auto; }
+.wide { max-width: 980px; margin-inline: auto; }
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: var(--s4); letter-spacing: -0.02em; }
+h2 { font-size: var(--s3); font-weight: 600; letter-spacing: -0.015em; }
+h3 { font-size: var(--s1); font-weight: 600; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.4rem; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code); padding: 0.08em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--mono); font-size: 0.82rem; background: var(--code); padding: 0.9rem 1rem; border-radius: 10px; overflow-x: auto; margin: 0; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+.muted { color: var(--muted); } .small { font-size: var(--s0); }
+.eyebrow { font-family: var(--mono); font-size: var(--s0); color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; }
+.stack { display: flex; flex-direction: column; gap: 1.1rem; }
+section { padding-block: 2.75rem; }
+section + section { border-top: 1px solid var(--line); }
+.bar { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,0.94); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.bar-in { display: flex; align-items: center; gap: 1rem; padding-block: 0.6rem; }
+.brand { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+.tabs { display: flex; gap: 0.25rem; margin-left: auto; }
+.tabs button { white-space: nowrap; font: inherit; font-size: var(--s0); font-weight: 500; border: 0; background: transparent; color: var(--muted); padding: 0.4rem 0.8rem; border-radius: 999px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
+.tab[hidden] { display: none; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; background: var(--band); }
+.num { font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; }
+.picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.picker button { font: inherit; font-family: var(--mono); font-size: var(--s0); border: 1px solid var(--line); background: var(--paper); color: var(--ink); padding: 0.4rem 0.8rem; border-radius: 999px; cursor: pointer; }
+.picker button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; }
+@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+.card { border: 1px solid var(--line); border-radius: 12px; padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.card .who { font-family: var(--mono); font-size: var(--s0); color: var(--muted); }
+.card .out { font-family: var(--mono); font-size: 0.9rem; overflow-wrap: anywhere; }
+.card.ok { border-color: #b7e0da; background: #f3fbf9; }
+.card.bad { border-color: #f1c5bf; background: #fef6f5; }
+footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="bar wrap"><div class="bar-in wide">
+  <span class="brand">codemode-parity</span>
+  <div class="tabs" role="tablist" aria-label="Page sections">
+    <button role="tab" id="t-overview" aria-selected="true" aria-controls="overview">Overview</button>
+    <button role="tab" id="t-tech" aria-selected="false" aria-controls="tech">Technical details</button>
+  </div>
+</div></div>
+
+<main>
+<div class="tab" id="overview" role="tabpanel" aria-labelledby="t-overview">
+<section class="wrap"><div class="col stack">
+  <p class="eyebrow">mcp-use code mode</p>
+  <h1>A program that throws should say why, on every executor</h1>
+  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>. The E2B executor runs it in a remote sandbox. When a program threw on E2B, the caller got <code>exit status 1</code> and lost both the message and the logs. This project finds out why, measures how often it happens, and proposes a small patch with tests.</p>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>Before and after</h2>
+  <p>The program is <code>console.log("starting"); throw new Error("boom");</code>.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>error</th><th>logs</th></tr></thead>
+    <tbody>
+      <tr><td>VM executor</td><td><code>boom</code></td><td><code>starting</code></td></tr>
+      <tr><td>E2B today</td><td><code>exit status 1</code></td><td>empty</td></tr>
+      <tr><td>E2B with the patch</td><td><code>boom</code></td><td><code>starting</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="small muted">The E2B rows come from an offline sandbox that runs the script in a real <code>node</code> process and throws the real SDK error. The same patch passed 8 of 8 cases on real E2B.</p>
+</div></section>
+
+<section class="wrap"><div class="wide stack">
+  <div class="col stack">
+    <h2>Try the same program on each executor</h2>
+    <p class="small muted">Recorded output, not a live run. Pick a program.</p>
+    <div class="picker" id="picker" role="group" aria-label="Program"></div>
+    <pre><code id="code"></code></pre>
+    <p id="why" class="muted"></p>
+  </div>
+  <div class="cards" id="cards"></div>
+  <div class="col"><p class="small muted">The patch fixes only the first program. The second and third are listed as open differences on purpose.</p></div>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>How often it happens</h2>
+  <p>60 model-written programs in 10 patterns (discovery, parallel calls, data shaping, dates, logging, thrown errors and others) ran on real E2B and on the VM, and were compared on result, error and logs. The patterns were chosen by hand, so this shows which patterns differ and not how often a real agent hits them.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Code</th><th class="num">All match</th><th class="num">Result or error differs</th><th class="num">Logs only</th><th class="num">Real error lost</th></tr></thead>
+    <tbody>
+      <tr><td>Shipped (canary <code>d3f543b</code>)</td><td class="num">0</td><td class="num">33</td><td class="num">27</td><td class="num">22</td></tr>
+      <tr><td>Prototype with all fixes</td><td class="num">54</td><td class="num">6</td><td class="num">0</td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+  <p>The 0 needs its breakdown. 27 programs differ only by one extra log line, so the number that matters is 33, and in 22 of those the real error was lost. In the prototype the other 6 are tool calls that never answer, where the VM does not apply its timeout (issue #2874).</p>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>Limits</h2>
+  <ul>
+    <li>A program that reads its own script can forge the error marker. The patch reports the program's own error and is not a security boundary.</li>
+    <li>Real E2B was run in one region at the default sandbox size, 8 cases per run. Cost was not read from the E2B dashboard.</li>
+    <li>Two tool calls in one output chunk still run one after the other, and a call split across chunks is not served. Open PRs #2915 and #2984 cover those.</li>
+    <li>The 60 programs were written by a language model and chosen by hand.</li>
+  </ul>
+</div></section>
+</div>
+
+<div class="tab" id="tech" role="tabpanel" aria-labelledby="t-tech" hidden>
+<section class="wrap"><div class="col stack">
+  <p class="eyebrow">Technical details</p>
+  <h2>Why <code>exit status 1</code></h2>
+  <p>The executor writes the model's program to a file in the sandbox and runs <code>node file.js</code> with <code>sandbox.commands.run(...)</code>. It then checked <code>execution.exitCode !== 0</code>. In <code>e2b</code> 2.32.0 that call does not return on a non-zero exit. It rejects with <code>CommandExitError</code>, which carries <code>exitCode</code>, <code>stdout</code> and <code>stderr</code>. The check never ran, the outer <code>catch</code> reported the SDK message, and the output was dropped.</p>
+<pre><code>const execution = await command.catch((e) =&gt; {
+  if (isCommandExit(e)) return e;   // a real non-zero exit, with its output
+  throw e;                          // anything else is still an error
+});</code></pre>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>Getting the message out</h2>
+  <p>The wrapper that surrounds the program writes the thrown message on its own line, <code>__MCP_PROGRAM_ERROR_&lt;id&gt;__</code> followed by the message as JSON. The id is new for every run, so printed text cannot match it by accident. The host reads the last line with this run's id, removes it, and keeps all other output as logs. The wrapper saves <code>String</code>, <code>JSON.stringify</code>, the output writers and <code>process.exit</code> before the program starts, because the program shares the process and may replace them.</p>
+  <table>
+    <thead><tr><th>Situation</th><th>error</th></tr></thead>
+    <tbody>
+      <tr><td>Program threw</td><td>the thrown message</td></tr>
+      <tr><td>Node crashed outside the wrapper, for example a throw in a timer</td><td>the stderr, with its stack</td></tr>
+      <tr><td>Program called <code>process.exit(1)</code></td><td><code>exit status 1</code>, with any stderr kept in the logs</td></tr>
+    </tbody>
+  </table>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>A second bug, found on real E2B</h2>
+  <p>A program that starts a tool call that never answers and then throws never returned from <code>execute</code>, even after the command timeout. The SDK's event loop runs <code>await onStdout(chunk)</code> for each output chunk and delivers the exit event through the same loop. The executor's callback awaited the host tool call, so one stuck call blocked the exit.</p>
+<pre><code>onStdout: (data: string) =&gt; {
+  void this.serveToolCalls(sandbox, data);   // not awaited, and never rejects
+},</code></pre>
+  <p>The offline test sandbox first hid this, because it did not wait for callbacks. It now waits for each <code>onStdout</code> call before it reports the exit, like the SDK, so the regression test fails without the fix. A tool call that finishes after the sandbox is gone fails its write, and that error is dropped.</p>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>Tests and evidence</h2>
+  <ul>
+    <li><strong>23 offline tests.</strong> They cover thrown values that cannot be converted, replaced globals, large output, printed marker text before and after the error line, a direct exit with stderr, whitespace-only output, a crash outside the wrapper, tool calls that answer and fail, and the pending tool call.</li>
+    <li><strong>Real E2B, two runs of 8 cases.</strong> The first run passed 7 and exposed the hang. After the fix all 8 passed, and the pending-call case returned in under 2 seconds. No sandboxes were left running.</li>
+    <li><strong>Lint, type check and the client suite.</strong> The suite passes except two bundle tests that need a built <code>dist/</code> and fail the same way on untouched canary.</li>
+  </ul>
+  <p>A reader can rerun the four-program comparison with no key and no network: <code>sh reproduce/run.sh &lt;path to an mcp-use clone&gt;</code>. It exports the base commit twice, applies <code>patch/pr1-thrown-errors.diff</code> to one copy, and runs both in Docker.</p>
+</div></section>
+
+<section class="wrap"><div class="col stack">
+  <h2>What reviews said</h2>
+  <p>The patch went through several independent reviews. None was a clean accept. They found the pending-call hang, a printed-marker case, a rule for direct exits with stderr, and a flaw in the live test's cleanup. Each was fixed or recorded as a limit. Two findings were left open on purpose because they are older behavior covered by open PRs: tool calls sharing one output chunk, and calls split across chunks.</p>
+</div></section>
+</div>
+</main>
+
+<footer class="wrap"><div class="wide small muted">codemode-parity · Yash Gupta · <a href="https://github.com/yashgix/codemode-parity">github.com/yashgix/codemode-parity</a></div></footer>
+
+<script>
+const DATA = {"programs": {"thrown-error": {"code": "throw new Error(\"boom\");", "why": "The caller needs the real error to decide what to do next.", "vm": "error: boom", "e2b": "error: exit status 1", "fix": "error: boom"}, "printed-markers": {"code": "console.log(\"__MCP_RESULT_START__\");\nconsole.log(JSON.stringify(\"fake result payload\"));\nconsole.log(\"__MCP_RESULT_END__\");\nreturn \"real\";", "why": "Printed text that looks like the result markers replaces the real return value. This patch does not change it.", "vm": "\"real\"", "e2b": "\"fake result payload\"", "fix": "\"fake result payload\""}, "bigint-date": {"code": "return await test.inspect({ big: 10n, at: new Date(0) });", "why": "Values with no JSON form fail on the way through the bridge. This patch only makes the failure say why.", "vm": "{\"big\":\"bigint\",\"at\":\"[object Date]\"}", "e2b": "error: exit status 1", "fix": "error: Do not know how to serialize a BigInt"}, "never-answers": {"code": "await test.hang({});\nreturn \"finished\";", "why": "A tool call that never answers. The VM never applies the timeout to an awaited call, so it does not return in 4 s. E2B ends it.", "vm": "no return in 4 s", "e2b": "error: Script execution timed out", "fix": "error: Script execution timed out"}}};
+const $ = (id) => document.getElementById(id);
+const tabs = { "t-overview": "overview", "t-tech": "tech" };
+for (const [btn, panel] of Object.entries(tabs)) {
+  $(btn).addEventListener("click", () => {
+    for (const [b, p] of Object.entries(tabs)) {
+      $(b).setAttribute("aria-selected", String(b === btn));
+      $(p).hidden = p !== panel;
+    }
+  });
+}
+const names = Object.keys(DATA.programs);
+const picker = $("picker");
+function show(name) {
+  const p = DATA.programs[name];
+  for (const b of picker.children) b.setAttribute("aria-pressed", String(b.dataset.name === name));
+  $("code").textContent = p.code;
+  $("why").textContent = p.why;
+  const same = (a, b) => a === b;
+  const cards = [["VM executor", p.vm, null], ["E2B today", p.e2b, same(p.e2b, p.vm)], ["E2B with the patch", p.fix, same(p.fix, p.vm)]];
+  $("cards").replaceChildren(...cards.map(([who, out, match], i) => {
+    const el = document.createElement("div");
+    el.className = "card" + (i === 0 ? "" : match ? " ok" : " bad");
+    const w = document.createElement("div"); w.className = "who"; w.textContent = who + (i === 0 ? "" : match ? " (matches the VM)" : " (differs from the VM)");
+    const o = document.createElement("div"); o.className = "out"; o.textContent = out;
+    el.append(w, o);
+    return el;
+  }));
+}
+for (const name of names) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = name; b.dataset.name = name;
+  b.addEventListener("click", () => show(name));
+  picker.append(b);
+}
+show(names[0]);
+</script>
+</body>
+</html>

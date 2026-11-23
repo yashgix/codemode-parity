@@ -1,0 +1,709 @@
+diff --git a/libraries/typescript/.changeset/code-mode-e2b-exit-error.md b/libraries/typescript/.changeset/code-mode-e2b-exit-error.md
+new file mode 100644
+index 00000000..cb7e8751
+--- /dev/null
++++ b/libraries/typescript/.changeset/code-mode-e2b-exit-error.md
+@@ -0,0 +1,5 @@
++---
++"@mcp-use/client": patch
++---
++
++Code mode's E2B executor now reports a thrown program error and keeps its logs. The E2B SDK rejects on a non-zero exit, so callers previously received only `exit status 1`.
+diff --git a/libraries/typescript/packages/client/src/code-mode/executor-e2b.ts b/libraries/typescript/packages/client/src/code-mode/executor-e2b.ts
+index d479aca2..3c83e203 100644
+--- a/libraries/typescript/packages/client/src/code-mode/executor-e2b.ts
++++ b/libraries/typescript/packages/client/src/code-mode/executor-e2b.ts
+@@ -6,6 +6,65 @@ import { BaseCodeExecutor, type ExecutionResult } from "./executor.js";
+ // Dynamic import type for E2B Sandbox
+ type Sandbox = any;
+ 
++// Node prints this line after an uncaught exception.
++const UNCAUGHT_EXCEPTION = /^Node\.js v\d/m;
++
++function newErrorMarker(): string {
++  return `__MCP_PROGRAM_ERROR_${globalThis.crypto.randomUUID()}__`;
++}
++
++// The SDK rejects on a non-zero exit, with the command's output on the error.
++function isCommandExit(error: any): boolean {
++  return (
++    typeof error?.exitCode === "number" &&
++    error.exitCode !== 0 &&
++    typeof error.stdout === "string" &&
++    typeof error.stderr === "string"
++  );
++}
++
++function withoutToolCalls(output: string): string {
++  return output
++    .split("\n")
++    .filter((line) => !line.includes("__MCP_TOOL_CALL__"))
++    .join("\n");
++}
++
++// The wrapper's marker line carries the message of a thrown error. The marker
++// is new for every run, so printed text cannot imitate it by accident.
++function splitProgramError(
++  stderr: string,
++  marker: string
++): {
++  message?: string;
++  output: string;
++} {
++  const start = stderr.lastIndexOf(`\n${marker}`);
++  if (start === -1) return { output: stderr };
++
++  const from = start + marker.length + 1;
++  const newline = stderr.indexOf("\n", from);
++  const end = newline === -1 ? stderr.length : newline;
++  try {
++    const message = JSON.parse(stderr.slice(from, end));
++    if (typeof message === "string") {
++      return {
++        message,
++        output: stderr.slice(0, start) + stderr.slice(end + 1),
++      };
++    }
++  } catch {
++    // Printed text that only looks like the marker.
++  }
++  return { output: stderr };
++}
++
++function normalizeTimeoutError(message: string): string {
++  return message.includes("timeout") || message.includes("timed out")
++    ? "Script execution timed out"
++    : message;
++}
++
+ /**
+  * E2B-based code executor using remote sandboxes.
+  * Executes code in an E2B sandbox with tool calls proxied back to the host.
+@@ -178,6 +237,79 @@ global[${escapedSafeServerName}] = global[${escapedServerName}];
+     return catalog;
+   }
+ 
++  /**
++   * Serves the tool calls in a chunk of sandbox output. Never rejects, since
++   * nothing awaits it.
++   */
++  private async serveToolCalls(sandbox: Sandbox, data: string): Promise<void> {
++    // Check for tool calls
++    try {
++      const lines = data.split("\n");
++      for (const line of lines) {
++        if (line.trim().startsWith('{"type":"__MCP_TOOL_CALL__"')) {
++          const call = JSON.parse(line);
++          if (call.type === "__MCP_TOOL_CALL__") {
++            // Execute tool on host
++            try {
++              logger.debug(
++                `[E2B Bridge] Calling tool ${call.server}.${call.tool}`
++              );
++
++              // Get the session and call the tool
++              const activeSessions = this.client.getAllActiveSessions();
++              const session = activeSessions[call.server];
++
++              if (!session) {
++                throw new Error(`Server ${call.server} not found`);
++              }
++
++              const toolResult = await session.connector.callTool(
++                call.tool,
++                call.args
++              );
++
++              // Extract result from MCP response
++              let extractedResult: any = toolResult;
++              if (toolResult.content && toolResult.content.length > 0) {
++                const item = toolResult.content[0];
++                if (item.type === "text") {
++                  try {
++                    extractedResult = JSON.parse(item.text);
++                  } catch {
++                    extractedResult = item.text;
++                  }
++                } else {
++                  extractedResult = item;
++                }
++              }
++
++              // Write result back to sandbox
++              const resultPath = `/tmp/mcp_result_${call.id}.json`;
++              await sandbox.files.write(
++                resultPath,
++                JSON.stringify({ data: extractedResult })
++              );
++            } catch (err: any) {
++              logger.error(
++                `[E2B Bridge] Tool execution failed: ${err.message}`
++              );
++              // Write error back to sandbox
++              const resultPath = `/tmp/mcp_result_${call.id}.json`;
++              await sandbox.files.write(
++                resultPath,
++                JSON.stringify({
++                  error: err.message || String(err),
++                })
++              );
++            }
++          }
++        }
++      }
++    } catch (e) {
++      // Ignore parsing errors for non-JSON lines
++    }
++  }
++
+   /**
+    * Execute JavaScript/TypeScript code in an E2B sandbox with MCP tool access.
+    * Tool calls are proxied back to the host via the bridge pattern.
+@@ -197,6 +329,7 @@ global[${escapedSafeServerName}] = global[${escapedServerName}];
+ 
+       // Get or create sandbox
+       const sandbox = await this.getOrCreateCodeExecSandbox();
++      const errorMarker = newErrorMarker();
+ 
+       // Build tool catalog and generate shim
+       const toolCatalog = this.buildToolCatalog();
+@@ -208,6 +341,11 @@ global[${escapedSafeServerName}] = global[${escapedServerName}];
+ ${shim}
+ 
+ (async () => {
++    const __mcpString = String;
++    const __mcpStringify = JSON.stringify;
++    const __mcpWriteStdout = process.stdout.write.bind(process.stdout);
++    const __mcpWriteStderr = process.stderr.write.bind(process.stderr);
++    const __mcpExit = process.exit.bind(process);
+     try {
+         const func = async () => {
+             ${code}
+@@ -217,8 +355,12 @@ ${shim}
+         console.log(JSON.stringify(result));
+         console.log('__MCP_RESULT_END__');
+     } catch (e) {
+-        console.error(e);
+-        process.exit(1);
++        let message = 'Unknown error';
++        try {
++            message = __mcpString((e && e.message) || e);
++        } catch {}
++        const line = '\\n' + ${JSON.stringify(errorMarker)} + __mcpStringify(message) + '\\n';
++        __mcpWriteStdout('', () => __mcpWriteStderr(line, () => __mcpExit(1)));
+     }
+ })();
+ `;
+@@ -227,82 +369,32 @@ ${shim}
+       await sandbox.files.write(filename, wrappedCode);
+ 
+       // Execute the file
+-      const execution = await sandbox.commands.run(`node ${filename}`, {
++      const command = sandbox.commands.run(`node ${filename}`, {
+         timeoutMs: timeout,
+-        onStdout: async (data: string) => {
+-          // Check for tool calls
+-          try {
+-            const lines = data.split("\n");
+-            for (const line of lines) {
+-              if (line.trim().startsWith('{"type":"__MCP_TOOL_CALL__"')) {
+-                const call = JSON.parse(line);
+-                if (call.type === "__MCP_TOOL_CALL__") {
+-                  // Execute tool on host
+-                  try {
+-                    logger.debug(
+-                      `[E2B Bridge] Calling tool ${call.server}.${call.tool}`
+-                    );
+-
+-                    // Get the session and call the tool
+-                    const activeSessions = this.client.getAllActiveSessions();
+-                    const session = activeSessions[call.server];
+-
+-                    if (!session) {
+-                      throw new Error(`Server ${call.server} not found`);
+-                    }
+-
+-                    const toolResult = await session.connector.callTool(
+-                      call.tool,
+-                      call.args
+-                    );
+-
+-                    // Extract result from MCP response
+-                    let extractedResult: any = toolResult;
+-                    if (toolResult.content && toolResult.content.length > 0) {
+-                      const item = toolResult.content[0];
+-                      if (item.type === "text") {
+-                        try {
+-                          extractedResult = JSON.parse(item.text);
+-                        } catch {
+-                          extractedResult = item.text;
+-                        }
+-                      } else {
+-                        extractedResult = item;
+-                      }
+-                    }
+-
+-                    // Write result back to sandbox
+-                    const resultPath = `/tmp/mcp_result_${call.id}.json`;
+-                    await sandbox.files.write(
+-                      resultPath,
+-                      JSON.stringify({ data: extractedResult })
+-                    );
+-                  } catch (err: any) {
+-                    logger.error(
+-                      `[E2B Bridge] Tool execution failed: ${err.message}`
+-                    );
+-                    // Write error back to sandbox
+-                    const resultPath = `/tmp/mcp_result_${call.id}.json`;
+-                    await sandbox.files.write(
+-                      resultPath,
+-                      JSON.stringify({
+-                        error: err.message || String(err),
+-                      })
+-                    );
+-                  }
+-                }
+-              }
+-            }
+-          } catch (e) {
+-            // Ignore parsing errors for non-JSON lines
+-          }
++        // Not awaited: the SDK waits for this callback before it reports the
++        // command's exit, so a tool call that never answers would block it.
++        onStdout: (data: string) => {
++          void this.serveToolCalls(sandbox, data);
+         },
+       });
++      const execution = await command.catch((e: unknown) => {
++        if (isCommandExit(e)) return e;
++        throw e;
++      });
+ 
+       logs = [execution.stdout, execution.stderr].filter(Boolean);
+ 
+       if (execution.exitCode !== 0) {
+-        error = execution.stderr || "Execution failed";
++        const { message, output } = splitProgramError(
++          execution.stderr,
++          errorMarker
++        );
++        const sdkError =
++          execution.error && normalizeTimeoutError(execution.error);
++        // Other stderr is only the error when node itself reported a crash.
++        const crash = UNCAUGHT_EXCEPTION.test(output) && output.trim();
++        error = message ?? (crash || sdkError || "Execution failed");
++        logs = [withoutToolCalls(execution.stdout), output].filter(Boolean);
+       } else {
+         const stdout = execution.stdout;
+         const startMarker = "__MCP_RESULT_START__";
+@@ -323,26 +415,17 @@ ${shim}
+ 
+           // Clean logs - remove result block and tool calls
+           logs = logs.map((log) => {
+-            let cleaned = log.replace(
++            const cleaned = log.replace(
+               new RegExp(startMarker + "[\\s\\S]*?" + endMarker),
+               "[Result captured]"
+             );
+             // Also hide the raw tool call JSON lines from user logs to keep it clean
+-            cleaned = cleaned
+-              .split("\n")
+-              .filter((l) => !l.includes("__MCP_TOOL_CALL__"))
+-              .join("\n");
+-            return cleaned;
++            return withoutToolCalls(cleaned);
+           });
+         }
+       }
+     } catch (e: any) {
+-      error = e.message || String(e);
+-
+-      // Check for timeout
+-      if (error && (error.includes("timeout") || error.includes("timed out"))) {
+-        error = "Script execution timed out";
+-      }
++      error = normalizeTimeoutError(e.message || String(e));
+     }
+ 
+     return {
+diff --git a/libraries/typescript/packages/client/tests/unit/client/executor-e2b-exit.test.ts b/libraries/typescript/packages/client/tests/unit/client/executor-e2b-exit.test.ts
+new file mode 100644
+index 00000000..70fe6042
+--- /dev/null
++++ b/libraries/typescript/packages/client/tests/unit/client/executor-e2b-exit.test.ts
+@@ -0,0 +1,375 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import type { Tool } from "@modelcontextprotocol/client";
++import { E2BCodeExecutor } from "../../../src/code-mode/executor-e2b.js";
++import type { MCPClient } from "../../../src/core/node.js";
++
++const sandboxMocks = vi.hoisted(() => ({
++  forcedRunRejection: null as any,
++}));
++
++vi.mock("@e2b/code-interpreter", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("@e2b/code-interpreter")>();
++  const fs = await import("node:fs/promises");
++  const os = await import("node:os");
++  const path = await import("node:path");
++  const { spawn } = await import("node:child_process");
++
++  const RealCommandExitError = actual.CommandExitError;
++
++  class FakeSandbox {
++    private constructor(private readonly dir: string) {}
++
++    files = {
++      write: async (filename: string, content: string) => {
++        const resolved = path.isAbsolute(filename)
++          ? filename
++          : path.join(this.dir, filename);
++        await fs.mkdir(path.dirname(resolved), { recursive: true });
++        await fs.writeFile(resolved, content, "utf8");
++      },
++    };
++
++    commands = {
++      run: async (command: string, options: any) => {
++        if (sandboxMocks.forcedRunRejection) {
++          throw sandboxMocks.forcedRunRejection;
++        }
++
++        const [, filename = ""] = command.split(" ");
++        const absoluteFilename = path.isAbsolute(filename)
++          ? filename
++          : path.join(this.dir, filename);
++
++        return await new Promise<any>((resolve, reject) => {
++          const child = spawn(process.execPath, [absoluteFilename], {
++            cwd: this.dir,
++            stdio: ["ignore", "pipe", "pipe"],
++          });
++
++          let stdout = "";
++          let stderr = "";
++          // Like the SDK, deliver output one chunk at a time and wait for
++          // each callback before reporting that the command has ended.
++          let delivered = Promise.resolve();
++
++          child.stdout.setEncoding("utf8");
++          child.stdout.on("data", (chunk: string) => {
++            stdout += chunk;
++            delivered = delivered.then(() => options.onStdout?.(chunk));
++          });
++
++          child.stderr.setEncoding("utf8");
++          child.stderr.on("data", (chunk: string) => {
++            stderr += chunk;
++          });
++
++          child.on("error", reject);
++
++          child.on("close", async (code) => {
++            await delivered;
++            const exitCode = code ?? 1;
++
++            if (exitCode !== 0) {
++              reject(
++                new RealCommandExitError({
++                  exitCode,
++                  stdout,
++                  stderr,
++                  error: `exit status ${exitCode}`,
++                } as any)
++              );
++              return;
++            }
++
++            resolve({ exitCode: 0, stdout, stderr, error: undefined });
++          });
++        });
++      },
++    };
++
++    kill = async () => {
++      await fs.rm(this.dir, { recursive: true, force: true });
++    };
++
++    static async create(_template: string, _options: any) {
++      const dir = await fs.mkdtemp(
++        path.join(os.tmpdir(), "e2b-executor-test-")
++      );
++      return new FakeSandbox(dir);
++    }
++  }
++
++  return { ...actual, Sandbox: FakeSandbox };
++});
++
++function makeClient() {
++  const echoTool = {
++    name: "echo",
++    description: "Echo input",
++    inputSchema: { type: "object", properties: { text: { type: "string" } } },
++  } as Tool;
++
++  const hangTool = { ...echoTool, name: "hang" } as Tool;
++  const failTool = { ...echoTool, name: "fail" } as Tool;
++
++  const sessions = {
++    test: {
++      connector: {
++        tools: [echoTool, hangTool, failTool],
++        callTool: (name: string, args: any) =>
++          name === "hang"
++            ? new Promise(() => {})
++            : name === "fail"
++              ? Promise.reject(new Error("tool failed"))
++              : Promise.resolve({
++                  content: [{ type: "text", text: JSON.stringify(args) }],
++                }),
++      },
++    },
++  };
++
++  return {
++    getServerNames: () => ["test"],
++    getAllActiveSessions: () => sessions,
++    createAllSessions: async () => sessions,
++  } as any;
++}
++
++describe("E2BCodeExecutor process exit handling", () => {
++  let client: any;
++  let executor: E2BCodeExecutor;
++
++  beforeEach(() => {
++    client = makeClient();
++    executor = new E2BCodeExecutor(client as MCPClient, { apiKey: "test" });
++  });
++
++  afterEach(async () => {
++    sandboxMocks.forcedRunRejection = undefined;
++    await executor.cleanup();
++  });
++
++  const run = (code: string) => executor.execute(code, 15000);
++
++  it("extracts a thrown Error message", async () => {
++    const result = await run('throw new Error("boom");');
++    expect(result.error).toBe("boom");
++    expect(result.result).toBeNull();
++  });
++
++  it("extracts a thrown non-Error string", async () => {
++    const result = await run('throw "bad thing";');
++    expect(result.error).toBe("bad thing");
++    expect(result.result).toBeNull();
++  });
++
++  it("preserves multi-line error messages", async () => {
++    const result = await run('throw new Error("line1\\nline2");');
++    expect(result.error).toBe("line1\nline2");
++  });
++
++  it("keeps console output but excludes it from error", async () => {
++    const result = await run(`
++      console.log("log before");
++      console.error("err before");
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual(["log before\n", "err before\n"]);
++  });
++
++  it("keeps stderr text that has no trailing newline", async () => {
++    const result = await run(`
++      process.stderr.write("partial");
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual(["partial"]);
++  });
++
++  it("does not take printed marker text as the error", async () => {
++    const printed = '__MCP_PROGRAM_ERROR__"fake"';
++    const result = await run(`
++      console.error(${JSON.stringify(printed)});
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual([`${printed}\n`]);
++  });
++
++  it("reports the error after the program replaces its output helpers", async () => {
++    const result = await run(`
++      String = () => "replaced";
++      JSON.stringify = () => "replaced";
++      process.stdout.write = () => true;
++      process.stderr.write = () => true;
++      process.exit = () => {};
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++  });
++
++  it("falls back when a thrown value cannot be converted", async () => {
++    const noPrototype = await run("throw Object.create(null);");
++    expect(noPrototype.error).toBe("Unknown error");
++
++    const badGetter = await run(
++      'throw { get message() { throw new Error("getter"); } };'
++    );
++    expect(badGetter.error).toBe("Unknown error");
++  });
++
++  it("keeps stderr written after the error line", async () => {
++    const result = await run(`
++      process.on("exit", () => require("node:fs").writeSync(2, "tail\\n"));
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual(["tail\n"]);
++  });
++
++  it("reports stderr for an error thrown outside the program's await", async () => {
++    const result = await run(`
++      setTimeout(() => { throw new Error("late"); }, 10);
++      await new Promise((resolve) => setTimeout(resolve, 5000));
++    `);
++
++    expect(result.error).toContain("late");
++  });
++
++  it("exits on a thrown error while a tool call is still pending", async () => {
++    const result = await run(`
++      test.hang({});
++      await new Promise((resolve) => setTimeout(resolve, 50));
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.execution_time).toBeLessThan(10);
++  });
++
++  it("removes tool-call bridge lines from logs", async () => {
++    const result = await run(`
++      await test.echo({ text: "hello" });
++      console.log("after tool");
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual(["after tool\n"]);
++  });
++
++  it("uses the SDK command error when the program exits directly", async () => {
++    const result = await run(`
++      console.log("before exit");
++      await new Promise((resolve) => setTimeout(resolve, 10));
++      process.exit(1);
++    `);
++
++    expect(result.error).toBe("exit status 1");
++    expect(result.logs).toEqual(["before exit\n"]);
++  });
++
++  it("keeps large stdout before the throw", async () => {
++    const result = await run(`
++      console.log("x".repeat(2 * 1024 * 1024));
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual([`${"x".repeat(2 * 1024 * 1024)}\n`]);
++  });
++
++  it("keeps an arbitrary SDK rejection message", async () => {
++    sandboxMocks.forcedRunRejection = new Error("sdk failed");
++    const result = await run('console.log("hi");');
++    expect(result.error).toBe("sdk failed");
++  });
++
++  it("does not recover a rejection with exitCode 0", async () => {
++    const rejection = new Error("sdk failed");
++    (rejection as any).exitCode = 0;
++    (rejection as any).stdout = "out";
++    (rejection as any).stderr = "err";
++    sandboxMocks.forcedRunRejection = rejection;
++
++    const result = await run('console.log("hi");');
++    expect(result.error).toBe("sdk failed");
++  });
++
++  it("does not recover an exit-shaped rejection without stdout", async () => {
++    const rejection = new Error("sdk failed");
++    (rejection as any).exitCode = 1;
++    (rejection as any).stderr = "some stderr";
++    sandboxMocks.forcedRunRejection = rejection;
++
++    const result = await run('console.log("hi");');
++    expect(result.error).toBe("sdk failed");
++  });
++
++  it("does not take marker-shaped text printed after the error line", async () => {
++    const printed = '__MCP_PROGRAM_ERROR__"fake"';
++    const result = await run(`
++      process.on("exit", () => require("node:fs").writeSync(2, ${JSON.stringify(`\n${printed}\n`)}));
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++  });
++
++  it("does not take marker-shaped text as the error of a direct exit", async () => {
++    const printed = '__MCP_PROGRAM_ERROR__"fake"';
++    const result = await run(`
++      console.error(${JSON.stringify(printed)});
++      process.exit(1);
++    `);
++
++    expect(result.error).toBe("exit status 1");
++    expect(result.logs).toEqual([`${printed}\n`]);
++  });
++
++  it("keeps whitespace-only output before a throw", async () => {
++    const result = await run(`
++      process.stdout.write("   ");
++      throw new Error("boom");
++    `);
++
++    expect(result.error).toBe("boom");
++    expect(result.logs).toEqual(["   "]);
++  });
++
++  it("reports exit status for a direct exit that wrote to stderr", async () => {
++    const result = await run(`
++      console.error("debug");
++      process.exit(1);
++    `);
++
++    expect(result.error).toBe("exit status 1");
++    expect(result.logs).toEqual(["debug\n"]);
++  });
++
++  it("still answers tool calls, including failing ones", async () => {
++    const result = await run(`
++      const ok = await test.echo({ text: "hi" });
++      const failed = await test.fail({}).catch((e) => e.message);
++      return { ok, failed };
++    `);
++
++    expect(result.error).toBeNull();
++    expect(result.result).toEqual({
++      ok: { text: "hi" },
++      failed: "tool failed",
++    });
++  });
++
++  it("still returns values for a successful program", async () => {
++    const result = await run(`return { ok: true, values: [1, 2, 3] };`);
++    expect(result.error).toBeNull();
++    expect(result.result).toEqual({ ok: true, values: [1, 2, 3] });
++  });
++});

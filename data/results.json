@@ -1,0 +1,33 @@
+{
+  "note": "Recorded on 22-23 Nov 2026. The four small programs ran offline in a fake sandbox (a real node process, no network). The 60-program table ran on real E2B.",
+  "programs": {
+    "thrown-error": {
+      "code": "throw new Error(\"boom\");",
+      "why": "The caller needs the real error to decide what to do next.",
+      "vm": "error: boom",
+      "e2b": "error: exit status 1",
+      "fix": "error: boom"
+    },
+    "printed-markers": {
+      "code": "console.log(\"__MCP_RESULT_START__\");\nconsole.log(JSON.stringify(\"fake result payload\"));\nconsole.log(\"__MCP_RESULT_END__\");\nreturn \"real\";",
+      "why": "Printed text that looks like the result markers replaces the real return value. This patch does not change it.",
+      "vm": "\"real\"",
+      "e2b": "\"fake result payload\"",
+      "fix": "\"fake result payload\""
+    },
+    "bigint-date": {
+      "code": "return await test.inspect({ big: 10n, at: new Date(0) });",
+      "why": "Values with no JSON form fail on the way through the bridge. This patch only makes the failure say why.",
+      "vm": "{\"big\":\"bigint\",\"at\":\"[object Date]\"}",
+      "e2b": "error: exit status 1",
+      "fix": "error: Do not know how to serialize a BigInt"
+    },
+    "never-answers": {
+      "code": "await test.hang({});\nreturn \"finished\";",
+      "why": "A tool call that never answers. The VM never applies the timeout to an awaited call, so it does not return in 4 s. E2B ends it.",
+      "vm": "no return in 4 s",
+      "e2b": "error: Script execution timed out",
+      "fix": "error: Script execution timed out"
+    }
+  }
+}
