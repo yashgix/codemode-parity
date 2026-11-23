@@ -20,7 +20,7 @@ for name in before after; do
 done
 (cd "$BUILD/after" && git apply --include='libraries/typescript/packages/client/src/*' "$PATCH")
 
-docker run --rm --network none --cpus 2 --memory 3g --user "$(id -u):$(id -g)" -e HOME=/tmp \
+docker run --rm --network none --cpus 2 --memory 3g --user "$(id -u):$(id -g)" -e HOME=/tmp -e NO_COLOR=1 \
   -v "$BUILD:/demo" -v "$REPO:/w:ro" "$IMAGE" sh -eu -c '
     PKG=libraries/typescript/packages/client
     for name in before after; do
