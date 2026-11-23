@@ -1,6 +1,6 @@
 # codemode-parity
 
-When a program threw on the E2B executor of [mcp-use](https://github.com/mcp-use/mcp-use) code mode, the caller got `exit status 1` and lost the message and the logs. This repo shows why, how often it happened, and a small patch with tests.
+When a program threw on the E2B executor of [mcp-use](https://github.com/mcp-use/mcp-use) code mode, the caller got `exit status 1` and lost the message and the logs. This repo shows why, a comparison across 60 test programs, and a small patch with tests.
 
 ```js
 console.log("starting");
@@ -13,7 +13,7 @@ throw new Error("boom");
 | E2B before | `exit status 1` | empty |
 | E2B with the patch | `boom` | `starting` |
 
-Reported upstream as [mcp-use#3161](https://github.com/mcp-use/mcp-use/issues/3161).
+The proposed patch is documented in [mcp-use issue #3161](https://github.com/mcp-use/mcp-use/issues/3161) while awaiting maintainer feedback.
 
 Read `docs/index.html` for the walkthrough and a small interactive comparison.
 
@@ -33,7 +33,7 @@ sh reproduce/run.sh path/to/mcp-use
 
 It exports the base commit twice, applies the patch to one copy, and runs both in a container with a fake sandbox that runs each script in a real `node` process and throws the real SDK error.
 
-## What was measured
+## Comparison across 60 test programs
 60 model-written programs in 10 patterns ran on real E2B and on the VM. On canary none matched on result, error and logs. 33 differed in result or error, and 22 of those lost the real error. The patterns were chosen by hand, so this shows which patterns differ and not how often a real agent hits them.
 
 ## Scope and boundaries

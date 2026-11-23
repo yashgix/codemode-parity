@@ -75,7 +75,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 <section class="wrap"><div class="col stack">
   <p class="eyebrow">mcp-use code mode</p>
   <h1>A program that throws should say why, on every executor</h1>
-  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>, and the E2B executor runs it in a remote sandbox. On E2B, a program that threw reached the caller as <code>exit status 1</code>, with its message and logs lost. This project diagnosed the mismatch with the E2B SDK's error handling, restored the real error message and logs, fixed a blocked-callback hang found on real E2B, and validated the patch with 23 targeted tests, 8 real E2B cases and the full client suite. It is proposed upstream in <a href="https://github.com/mcp-use/mcp-use/issues/3161">mcp-use issue #3161</a>. No pull request is open and nothing is merged.</p>
+  <p>mcp-use code mode lets a model write JavaScript that calls MCP tools. The default executor runs it in Node's <code>vm</code>, and the E2B executor runs it in a remote sandbox. On E2B, a program that threw reached the caller as <code>exit status 1</code>, with its message and logs lost. This project diagnosed the mismatch with the E2B SDK's error handling, restored the real error message and logs, fixed a blocked-callback hang found on real E2B, and validated the patch with 23 targeted tests, 8 real E2B cases and the full client suite. The proposed patch is documented in <a href="https://github.com/mcp-use/mcp-use/issues/3161">mcp-use issue #3161</a> while awaiting maintainer feedback.</p>
 </div></section>
 
 <section class="wrap"><div class="col stack">
@@ -105,7 +105,7 @@ footer { padding-block: 2rem 3rem; border-top: 1px solid var(--line); }
 </div></section>
 
 <section class="wrap"><div class="col stack">
-  <h2>How often it happens</h2>
+  <h2>Comparison across 60 test programs</h2>
   <p>60 model-written programs in 10 patterns (discovery, parallel calls, data shaping, dates, logging, thrown errors and others) ran on real E2B and on the VM, and were compared on result, error and logs. The patterns were chosen by hand, so this shows which patterns differ and not how often a real agent hits them.</p>
   <div class="tablewrap"><table>
     <thead><tr><th>Code</th><th class="num">All match</th><th class="num">Result or error differs</th><th class="num">Logs only</th><th class="num">Real error lost</th></tr></thead>
