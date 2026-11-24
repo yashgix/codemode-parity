@@ -1,5 +1,7 @@
 # codemode-parity
 
+**Live page:** https://yashgix.github.io/codemode-parity/
+
 When a program threw on the E2B executor of [mcp-use](https://github.com/mcp-use/mcp-use) code mode, the caller got `exit status 1` and lost the message and the logs. This repo shows why, a comparison across 60 test programs, and a small patch with tests.
 
 ```js
